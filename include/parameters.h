@@ -11,6 +11,7 @@
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 // #define DEBUG
 
@@ -32,10 +33,11 @@ constexpr static uint64_t NODE_HEADER_SIZE = 256;
 
 // Root size
 constexpr static uint64_t ROOT_SIZE = 8;
+constexpr static uint64_t LOG_NUMBER = 16;
 
 // Epsilon for training models
 constexpr static uint64_t EPSILON_LEAF_NODE = 256;
-constexpr static uint64_t EPSILON_INNER_NODE = 16;
+constexpr static uint64_t EPSILON_INNER_NODE = 8;
 
 // Initial filling ratio
 constexpr static double INNER_NODE_INIT_RATIO = 0.2;
@@ -53,12 +55,10 @@ constexpr static uint64_t MAX_BUFFER = (1 << 20);
 constexpr static _key_t FREE_FLAG = (std::numeric_limits<_key_t>::max());
 constexpr static _key_t DELETE_FLAG = (std::numeric_limits<_key_t>::max() - 1);
 
-//Concurrency control
-const uint32_t lockSet = ((uint32_t)1 << 31);
-const uint32_t lockMask = ((uint32_t)1 << 31) - 1;
-const uint64_t lockSet_64 = ((uint64_t)1 << 48);
-const uint64_t lockMask_64 = ((uint64_t)0xfffe << 48);
-const uint64_t lock_64_1 = ((uint64_t)1 << 48);
-const uint32_t counterMask = (uint32_t)1 <<31;
-const uint64_t addrMask = ((1ULL << 48) - 1);
-const uint64_t headerMask = (((1ULL << 16) - 1) << 48);
+// Concurrency control
+constexpr static uint32_t lockSet = ((uint32_t)1 << 31);
+constexpr static uint32_t lockMask = ((uint32_t)1 << 31) - 1;
+constexpr static uint32_t double_bit_lockSet = ((uint32_t)3 << 30);
+constexpr static uint32_t double_bit_lockMask = ((uint32_t)1 << 30) - 1;
+constexpr static uint32_t second_bit_lockSet = ((uint32_t)1 << 30);
+constexpr static uint32_t second_bit_lockMask = ((uint32_t)3 << 30) - 1;

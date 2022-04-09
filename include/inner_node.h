@@ -20,41 +20,6 @@ class InnerNode{
         uint64_t record_number = 0;
         _key_t first_key = FREE_FLAG;
         uint32_t level = 0;
-        bool is_leaf = true;
-
-        volatile uint32_t locked ;
-        inline void get_lock(){
-            uint32_t new_value = 0;
-            uint32_t old_value = 0;
-            do {
-                while (true) {
-                    old_value = __atomic_load_n(&locked, __ATOMIC_ACQUIRE);
-                    if (!(old_value & lockSet)) {
-                        old_value &= lockMask;
-                        break;
-                    }
-                }
-                new_value = old_value | lockSet;
-            } while (!CAS(&locked, &old_value, new_value));
-        }
-        
-        inline bool try_get_lock() {
-            uint32_t v = __atomic_load_n(&locked, __ATOMIC_ACQUIRE);
-            if (v & lockSet) {
-                return false;
-            }
-            return true;
-        }
-
-        inline void release_lock() {
-            uint32_t v = locked;
-            __atomic_store_n(&locked, v + 1 - lockSet, __ATOMIC_RELEASE);
-        }
-
-        inline bool test_lock_set(uint32_t &version) const {
-            version = __atomic_load_n(&locked, __ATOMIC_ACQUIRE);
-            return (version & lockSet) != 0;
-        }
     } inner_node;
     char unused[NODE_HEADER_SIZE - sizeof(InnerNodeMetadata)];
 
@@ -75,7 +40,7 @@ public:
         return predicted_block + 1;
     }
 
-    InnerNode(InnerSlot& accelerator, uint64_t block_number, _key_t* keys, InnerSlot* nodes, uint64_t number, uint64_t start_pos, double slope, double intercept, uint32_t level, bool is_leaf, bool rebuild = false) {
+    InnerNode(InnerSlot& accelerator, uint64_t block_number, _key_t* keys, InnerSlot* nodes, uint64_t number, uint64_t start_pos, double slope, double intercept, uint32_t level, bool rebuild = false) {
         // assert((uint64_t)inner_slots - (uint64_t)&inner_node == NODE_HEADER_SIZE);
         inner_node.block_number = block_number;
         inner_node.slope = slope / INNER_NODE_INIT_RATIO;
@@ -83,7 +48,6 @@ public:
         inner_node.record_number = number;
         inner_node.first_key = keys[start_pos];
         inner_node.level = level;
-        inner_node.is_leaf = is_leaf;
         do_flush(&inner_node, sizeof(inner_node));
         model_correction(inner_node.slope, inner_node.intercept, (inner_node.block_number - 3) * InnerSlotsPerBlock, keys[start_pos], keys[start_pos + number - 1]);
         // Init
@@ -103,18 +67,18 @@ public:
         accelerator.slope = inner_node.slope;
         accelerator.intercept = inner_node.intercept;
         accelerator.set_block_number(inner_node.block_number);
-        accelerator.set_skip(0);
         accelerator.set_type(1);
-        accelerator.set_lock();
+        accelerator.init_lock();
     }
     
+    ~InnerNode() {}
 
-    ~InnerNode() {
+    void destroy () {
         if (inner_node.level > 1) {
             uint64_t slot_number = inner_node.block_number * InnerSlotsPerBlock;
             for (uint64_t slot = 0; slot < slot_number; ++slot) {
                 if (inner_slots[slot].min_key != FREE_FLAG) {
-                    delete reinterpret_cast<InnerNode*>(galc->absolute(inner_slots[slot].ptr));
+                    reinterpret_cast<InnerNode*>(galc->absolute(inner_slots[slot].ptr))->destroy();
                 }
             }
         }
@@ -142,10 +106,8 @@ public:
         }
     }
 
-    uint32_t upsert_node (InnerSlot& node, InnerSlot * accelerator) {//insert new node
-        if(!accelerator ->try_get_lock())//
-            return 0;
-        accelerator ->get_lock();
+    // Upsert new nodes
+    uint32_t upsert_node (InnerSlot& node, InnerSlot * accelerator) {
         uint64_t slot = predict_block(node.min_key, accelerator->slope, accelerator->intercept, accelerator->block_number()) * InnerSlotsPerBlock;
         uint64_t predicted_slot = slot;
         // Search left
@@ -160,21 +122,20 @@ public:
             --slot;
         }
         if (inner_slots[slot].type()) {
-            accelerator ->release_lock();
             return reinterpret_cast<InnerNode*>(galc->absolute(inner_slots[slot].ptr))->upsert_node(node, &inner_slots[slot]);
         }
         // Upsert node
         else {
             if (inner_slots[slot].min_key == node.min_key) {
-                LeafNode* old_node = reinterpret_cast<LeafNode*>(galc->absolute(inner_slots[slot].ptr));
+                accelerator->get_lock();
                 inner_slots[slot] = node;
                 do_flush(&inner_slots[slot], sizeof(InnerSlot));
                 mfence();
-                galc->free(old_node);
-                accelerator ->release_lock();
+                accelerator->release_lock();
                 return 1;
             }
             else if (inner_slots[predicted_slot + InnerSlotsPerBlock - 1].min_key == FREE_FLAG) {
+                accelerator->get_lock();
                 uint64_t target_slot = predicted_slot;
                 if (slot >= predicted_slot) {
                     while (inner_slots[++target_slot].min_key <= node.min_key) {}
@@ -187,11 +148,10 @@ public:
                 inner_slots[target_slot] = node;
                 do_flush(&inner_slots[predicted_slot], InnerSlotsPerBlock * sizeof(InnerSlot));
                 mfence();
-                accelerator ->release_lock();
+                accelerator->release_lock();
                 return 2;
             }
             else {
-                accelerator ->release_lock();
                 return 3;
             }
         }

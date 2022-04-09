@@ -4,7 +4,7 @@ project(Plin)
 
 set(CMAKE_CXX_STANDARD 20)
 
-set(CMAKE_CXX_FLAGS  "-Iinclude -mclflushopt -mclwb -march=native -O3 -fopenmp")
+set(CMAKE_CXX_FLAGS  "-Iinclude -mclflushopt -mclwb -march=native -O3")
 
 add_executable(${PROJECT_NAME} test.cpp)
 

@@ -21,7 +21,6 @@ void run_search_test(TestIndex& test_index, _key_t* keys, _payload_t* payloads, 
             throw std::logic_error("Answer wrong!");
         }
     }
-
 }
 
 void run_upsert_test(TestIndex& test_index, _key_t* keys, _payload_t* payloads, size_t number){
@@ -94,6 +93,7 @@ void test(uint64_t thread_cnt){
         delete upsert_test[i];
     }
 }
-int main(){
+
+int main() {
     test(40);
 }

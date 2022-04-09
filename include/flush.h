@@ -7,7 +7,6 @@
 #pragma once
 
 #include <x86intrin.h>
-
 #include "parameters.h"
 
 extern uint32_t flush_cnt;

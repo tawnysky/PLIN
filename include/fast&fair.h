@@ -57,7 +57,7 @@ class btree {
         void range_query (_key_t lower_bound, _key_t upper_bound, std::vector<std::pair<_key_t, _payload_t>>& answers);
         void get_data (std::vector<_key_t>& keys, std::vector<_payload_t>& payloads);
         void node_size (uint64_t& overflow_number);
-        uint32_t upsert(_key_t, _payload_t);
+        uint32_t upsert(_key_t, _payload_t, uint32_t ds);
         
         void printAll();
 		void print_height();
@@ -99,9 +99,7 @@ class header{
             is_deleted = false;
         }
 
-        ~header() {
-
-        }
+        ~header() {}
 
 };
 
@@ -989,7 +987,7 @@ bool btree::find(_key_t key, _payload_t & val){
 }
 
 // insert the key in the leaf node
-void btree::insert(_key_t key, _payload_t right){ //need to be std::string
+void btree::insert(_key_t key, _payload_t right){ // need to be std::string
     page* p = (page *) galc->absolute(root);
 
     while(p->hdr.leftmost_ptr != NULL) {
@@ -1100,8 +1098,9 @@ bool btree::update(_key_t key, _payload_t value){ //need to be std::string
         return p->update_value(key, value);
 }
 
-// upsert
-uint32_t btree::upsert(_key_t key, _payload_t value){
+// Upsert
+// 2 : Goto learned node to insert; 3 : update; 4 : insert
+uint32_t btree::upsert(_key_t key, _payload_t value, uint32_t ds){
     page* p = (page *) galc->absolute(root);
 
     while(p->hdr.leftmost_ptr != NULL) {
@@ -1117,7 +1116,10 @@ uint32_t btree::upsert(_key_t key, _payload_t value){
     }
 
     if(!t) {
-        if(!first_p->store(this, NULL, key, (char *)value, true)) { // store 
+        if (ds > 0) {
+            return 2;
+        }
+        if(!first_p->store(this, NULL, key, (char *)value, true)) {
             insert(key, value);
         }
         return 4;
