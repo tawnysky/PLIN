@@ -86,14 +86,16 @@ public:
     }
 
     InnerSlot * find_leaf_node (_key_t key, const InnerSlot * accelerator) {
-        uint64_t slot = predict_block(key, accelerator->slope, accelerator->intercept, accelerator->block_number()) * InnerSlotsPerBlock;
+        uint32_t block_number = accelerator->block_number();
+        uint64_t slot = predict_block(key, accelerator->slope, accelerator->intercept, block_number) * InnerSlotsPerBlock;
         // Search left
         if (inner_slots[slot].min_key == FREE_FLAG || key < inner_slots[slot].min_key) {
             while (inner_slots[--slot].min_key == FREE_FLAG) {}
         }
         // Search right
         else {
-            while (slot < inner_node.block_number * InnerSlotsPerBlock && inner_slots[slot].min_key != FREE_FLAG && key >= inner_slots[slot].min_key) {
+            uint32_t slot_number = block_number * InnerSlotsPerBlock;
+            while (slot < slot_number && inner_slots[slot].min_key != FREE_FLAG && key >= inner_slots[slot].min_key) {
                 ++slot;
             }
             --slot;
@@ -108,7 +110,8 @@ public:
 
     // Upsert new nodes
     uint32_t upsert_node (InnerSlot& node, InnerSlot * accelerator) {
-        uint64_t slot = predict_block(node.min_key, accelerator->slope, accelerator->intercept, accelerator->block_number()) * InnerSlotsPerBlock;
+        uint32_t block_number = accelerator->block_number();
+        uint64_t slot = predict_block(node.min_key, accelerator->slope, accelerator->intercept, block_number) * InnerSlotsPerBlock;
         uint64_t predicted_slot = slot;
         // Search left
         if (inner_slots[slot].min_key == FREE_FLAG || node.min_key < inner_slots[slot].min_key) {
@@ -116,7 +119,8 @@ public:
         }
         // Search right
         else {
-            while (slot < inner_node.block_number * InnerSlotsPerBlock && inner_slots[slot].min_key != FREE_FLAG && node.min_key >= inner_slots[slot].min_key) {
+            uint32_t slot_number = block_number * InnerSlotsPerBlock;
+            while (slot < slot_number && inner_slots[slot].min_key != FREE_FLAG && node.min_key >= inner_slots[slot].min_key) {
                 ++slot;
             }
             --slot;

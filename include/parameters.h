@@ -12,8 +12,13 @@
 #include <vector>
 #include <algorithm>
 #include <atomic>
+// #include <chrono>
 
 // #define DEBUG
+
+// #define BACKGROUND_REBUILD
+#define BACKGROUND_SPLIT
+// #define BACKGROUND_CHECKLOGS
 
 // How to flush
 #define CLWB

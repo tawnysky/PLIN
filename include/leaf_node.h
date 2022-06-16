@@ -32,7 +32,7 @@ class LeafNode{
     struct BlockHeader {
         volatile uint32_t locked;   // 1 bit lock & 31 bit block version
         volatile uint32_t local_version;    // 32 bit global version
-        btree * overflow_tree;
+        void * overflow_tree;
 
         inline void check_global_version(uint32_t global_version){
             if (global_version != local_version) {
@@ -285,9 +285,11 @@ public:
                 }
             }
         } while (version_changed);
+
         // Find in overflow block
         if (leaf_slots[slot].header.overflow_tree) {
-            if(galc->absolute(leaf_slots[slot].header.overflow_tree)->find(key, payload)){
+            btree * overflow_tree = new btree(&leaf_slots[slot].header.overflow_tree, false);
+            if(overflow_tree->find(key, payload)){
                 return 1;
             }
         }
@@ -330,7 +332,8 @@ public:
                 }
             }
             if (leaf_slots[slot].header.overflow_tree) {
-                galc->absolute(leaf_slots[slot].header.overflow_tree)->range_query(lower_bound, upper_bound, answers);
+                btree* overflow_tree = new btree(&leaf_slots[slot].header.overflow_tree, false);
+                overflow_tree->range_query(lower_bound, upper_bound, answers);
             }
             ++block;
         }
@@ -397,12 +400,7 @@ public:
         }
 
         // Upsert into overflow block
-        if (!leaf_slots[slot].header.overflow_tree) {
-            leaf_slots[slot].header.overflow_tree = galc->relative(new btree());
-            do_flush(&leaf_slots[slot], sizeof(LeafSlot));
-            mfence();
-        }
-        btree* overflow_tree = galc->absolute(leaf_slots[slot].header.overflow_tree);
+        btree* overflow_tree = new btree(&leaf_slots[slot].header.overflow_tree, !leaf_slots[slot].header.overflow_tree);
         uint32_t flag = overflow_tree->upsert(key, payload, deleted_slot);
         if (flag == 2) {
             leaf_slots[slot + deleted_slot].data.payload = payload;
@@ -466,7 +464,7 @@ public:
         }
 
         if (leaf_slots[slot].header.overflow_tree) {
-            btree* overflow_tree = galc->absolute(leaf_slots[slot].header.overflow_tree);
+            btree* overflow_tree = new btree(&leaf_slots[slot].header.overflow_tree, false);
             if (overflow_tree->remove(key)) {
                 leaf_slots[slot].header.release_lock();
                 --leaf_node.overflow_number;
@@ -489,10 +487,7 @@ public:
             }
         }
         // Insert into overflow block
-        if (!leaf_slots[slot].header.overflow_tree) {
-            leaf_slots[slot].header.overflow_tree = galc->relative(new btree());
-        }
-        btree* overflow_tree = galc->absolute(leaf_slots[slot].header.overflow_tree);
+        btree* overflow_tree = new btree(&leaf_slots[slot].header.overflow_tree, !leaf_slots[slot].header.overflow_tree);
         overflow_tree->insert(key, payload);
         ++leaf_node.overflow_number;
         return;
@@ -503,7 +498,7 @@ public:
             leaf_slots[block*LeafSlotsPerBlock].header.check_lock(global_version);      // Ensure no write on this block
             std::sort(leaf_slots + (block * LeafSlotsPerBlock + 1), leaf_slots + ((block + 1) * LeafSlotsPerBlock), leafslot_cmp);
             if (leaf_slots[block * LeafSlotsPerBlock].header.overflow_tree) {
-                btree* overflow_tree = galc->absolute(leaf_slots[block * LeafSlotsPerBlock].header.overflow_tree);
+                btree* overflow_tree = new btree(&leaf_slots[block * LeafSlotsPerBlock].header.overflow_tree, false);
                 std::vector<_key_t> overflowed_keys;
                 std::vector<_payload_t> overflowed_payloads;
                 overflow_tree->get_data(overflowed_keys, overflowed_payloads);
@@ -540,3 +535,4 @@ public:
     }
 
 };
+

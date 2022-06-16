@@ -34,19 +34,17 @@ class btree {
     private:
         void btree_insert_internal(char *, _key_t, char *, uint32_t);
         void btree_delete_internal(_key_t, char *, uint32_t, _key_t *, bool *, page **);
-        inline page * get_root() {
-            return galc->absolute(root);
-        }
 
     public:
 
+        void ** addr;
         page * root;
 
-        btree();
+        // btree();
         
-        btree(std::vector<Record> & recs);
+        btree(void** addr, bool init);
 
-        void setNewRoot(void *);
+        void setNewRoot(page*);
         void getNumberOfNodes();
 
         void insert(_key_t, _payload_t);
@@ -223,7 +221,7 @@ class page{
                 int num_entries_before = count();
 
                 // This node is root
-                page * root = galc->absolute(bt->root);
+                page * root = bt->root;
                 if(this == root) {
                     if(hdr.level > 0) {
                         if(num_entries_before == 1 && !hdr.sibling_ptr) {
@@ -323,9 +321,9 @@ class page{
                         do_flush_with_double_fence((char *)&(left_sibling->hdr.last_index), sizeof(int16_t));
                     }
 
-                    if(left_sibling == ((page *)bt->get_root())) {
+                    if(left_sibling == bt->root) {
                         page* new_root = new page(left_sibling, parent_key, this, hdr.level + 1);
-                        bt->setNewRoot((void *)new_root);
+                        bt->setNewRoot(new_root);
                     }
                     else {
                         bt->btree_insert_internal
@@ -382,9 +380,9 @@ class page{
                         do_flush_with_double_fence(&(left_sibling->hdr), sizeof(header));
                     }
 
-                    if(left_sibling == ((page *)bt->get_root())) {
+                    if(left_sibling == bt->root) {
                         page* new_root = new page(left_sibling, parent_key, new_sibling, hdr.level + 1);
-                        bt->setNewRoot((void *)new_root);
+                        bt->setNewRoot(new_root);
                     }
                     else {
                         bt->btree_insert_internal
@@ -562,10 +560,10 @@ class page{
                     }
 
                     // Set a new root or insert the split key to the parent
-                    if(bt->get_root() == this) { // only one node can update the root ptr
+                    if(bt->root == this) { // only one node can update the root ptr
                         page* new_root = new page((page*)this, split_key, sibling, 
                                 hdr.level + 1);
-                        bt->setNewRoot((void *)new_root);
+                        bt->setNewRoot(new_root);
 
                     }
                     else {
@@ -957,13 +955,8 @@ class page{
         
 };
 
-void btree::setNewRoot(void *new_root) {
-    root = (page *) galc->relative(new_root);
-    do_flush_with_double_fence(&(root), 8);
-}
-
 bool btree::find(_key_t key, _payload_t & val){
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->linear_search(key));
@@ -988,7 +981,7 @@ bool btree::find(_key_t key, _payload_t & val){
 
 // insert the key in the leaf node
 void btree::insert(_key_t key, _payload_t right){ // need to be std::string
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->linear_search(key));
@@ -1000,7 +993,7 @@ void btree::insert(_key_t key, _payload_t right){ // need to be std::string
 
 // store the key into the node at the given level 
 void btree::btree_insert_internal(char *left, _key_t key, char *right, uint32_t level) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     if(level > p->hdr.level)
         return;
@@ -1014,7 +1007,7 @@ void btree::btree_insert_internal(char *left, _key_t key, char *right, uint32_t 
 }
 
 bool btree::remove(_key_t key) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p->hdr.leftmost_ptr != NULL){
         p = (page *)galc->absolute(p->linear_search(key));
@@ -1043,7 +1036,7 @@ bool btree::remove(_key_t key) {
 
 void btree::btree_delete_internal(_key_t key, char *ptr, uint32_t level, _key_t *deleted_key, 
  bool *is_leftmost_node, page **left_sibling) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
     
     if(level > p->hdr.level)
         return;
@@ -1089,7 +1082,7 @@ void btree::btree_delete_internal(_key_t key, char *ptr, uint32_t level, _key_t 
 
 // insert the key in the leaf node
 bool btree::update(_key_t key, _payload_t value){ //need to be std::string
-        page* p = (page *) galc->absolute(root);
+        page* p = root;
 
         while(p->hdr.leftmost_ptr != NULL) {
             p = (page *)galc->absolute(p->linear_search(key));
@@ -1101,7 +1094,7 @@ bool btree::update(_key_t key, _payload_t value){ //need to be std::string
 // Upsert
 // 2 : Goto learned node to insert; 3 : update; 4 : insert
 uint32_t btree::upsert(_key_t key, _payload_t value, uint32_t ds){
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->linear_search(key));
@@ -1132,7 +1125,7 @@ uint32_t btree::upsert(_key_t key, _payload_t value, uint32_t ds){
 
 // Function to search keys from "min" to "max"
 int btree::scan(_key_t min, int scan_sz, _payload_t * buf) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p) {
         if(p->hdr.leftmost_ptr != NULL) {
@@ -1150,7 +1143,7 @@ int btree::scan(_key_t min, int scan_sz, _payload_t * buf) {
 }
 
 void btree::range_query (_key_t lower_bound, _key_t upper_bound, std::vector<std::pair<_key_t, _payload_t>>& answers) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while (p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->hdr.leftmost_ptr); 
@@ -1164,7 +1157,7 @@ void btree::range_query (_key_t lower_bound, _key_t upper_bound, std::vector<std
 }
 
 void btree::get_data (std::vector<_key_t>& keys, std::vector<_payload_t>& payloads) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while (p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->hdr.leftmost_ptr); 
@@ -1180,7 +1173,7 @@ void btree::get_data (std::vector<_key_t>& keys, std::vector<_payload_t>& payloa
 
 void btree::node_size (uint64_t& overflow_number) {
 
-    page *leftmost = (page *) galc->absolute(root);
+    page *leftmost = root;
     do {
         page *sibling = leftmost;
         while(sibling) {
@@ -1196,7 +1189,7 @@ void btree::node_size (uint64_t& overflow_number) {
 
 void btree::printAll(){
     int total_keys = 0;
-    page *leftmost = (page *) galc->absolute(root);
+    page *leftmost = root;
     
 	printf("root: %lx\n", (long unsigned int)leftmost);
     do {
@@ -1217,7 +1210,7 @@ void btree::printAll(){
 
 // additional function to iterater the tree
 char ** btree::find_lower(_key_t key) const{
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
 
     while(p->hdr.leftmost_ptr != NULL) {
         p = (page *)galc->absolute(p->linear_search(key));
@@ -1235,7 +1228,7 @@ char ** btree::find_lower(_key_t key) const{
 }
 
 bool btree::try_remove(_key_t key, bool & need_rebuild) {
-    page* p = (page *) galc->absolute(root);
+    page* p = root;
     while(p->hdr.leftmost_ptr != NULL){
         p = (page *)galc->absolute(p->linear_search(key));
     }
@@ -1258,21 +1251,28 @@ bool btree::try_remove(_key_t key, bool & need_rebuild) {
 }
 
 void btree::print_height() {
-	page* p = (page *) galc->absolute(root);			
+	page* p = root;			
 	printf("Height: %d\n", p->hdr.level + 1);
 }
 
-btree::btree() {
-    root = galc->relative(new page());
-    do_flush_with_double_fence(&(root), 8);
-}
+// btree::btree() {
+//     root = galc->absolute(new page());
+// }
 
-btree::btree(std::vector<Record> & rec) {
-    root = galc->relative(new page());
-    do_flush_with_double_fence(&(root), 8);
-
-    for(auto r : rec) {
-        insert(r.key, (_payload_t)r.val);
+btree::btree(void** addr, bool init)
+    : addr(addr) {
+    if (init) {
+        root = new page();
+        *addr = galc->relative(root);
+        do_flush_with_double_fence(addr, 8);
+    }
+    else {
+        root = (page*) galc->absolute(*addr);
     }
 }
 
+void btree::setNewRoot(page *new_root) {
+    root = new_root;
+    *addr = galc->relative(new_root);
+    do_flush_with_double_fence(addr, 8);
+}

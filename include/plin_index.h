@@ -84,8 +84,8 @@ class PlinIndex {
     struct plin_metadata {
         _key_t min_key = 0;
         _key_t max_key = 0;
-        btree * left_buffer = NULL;
-        btree * right_buffer = NULL;
+        void * left_buffer = NULL;
+        void * right_buffer = NULL;
         uint32_t leaf_number = 0;
         uint32_t orphan_number = 0;
         uint32_t left_buffer_number = 0;
@@ -136,12 +136,16 @@ class PlinIndex {
 
 public:
 
+    // std::chrono::nanoseconds split_t, rebuild_t, log_t;
+    // uint32_t split_times = 0;
+    // uint32_t rebuild_times = 0;
+
     PlinIndex(std::string path, std::string id = "plin", bool recovery = false) {
         if (!recovery) {
             galc = new PMAllocator(path.c_str(), false, id.c_str());
             plin_ = (plin_metadata *) galc->get_root(sizeof(plin_metadata));
-            plin_->left_buffer = galc->relative(new btree());   
-            plin_->right_buffer = galc->relative(new btree());  
+            new btree(&plin_->left_buffer, true);
+            new btree(&plin_->right_buffer, true);
             do_flush(plin_, sizeof(plin_metadata));
             mfence();
         }
@@ -166,53 +170,62 @@ public:
                 do_flush(plin_, sizeof(plin_metadata));
                 mfence();
             }
-            for (uint32_t i = 0; i < LOG_NUMBER; ++i) {
-                if (!plin_->logs[i].check_lock()) {
-                    LeafNode * left_sibling = galc->absolute(plin_->logs[i].left_sibling);
-                    LeafNode * right_sibling = galc->absolute(plin_->logs[i].right_sibling);
-                    if (plin_->logs[i].check_valid()) {
-                        LeafNode * left_node = galc->absolute(plin_->logs[i].left_node);
-                        LeafNode * right_node = galc->absolute(plin_->logs[i].right_node);
-                        if (left_sibling) {
-                            left_sibling->set_next(left_node);
-                        }
-                        if (right_sibling) {
-                            right_sibling->set_prev(right_node);
-                        }
-                        if(!plin_->logs[i].check_orphan()) {
-                            _key_t first_key;
-                            InnerSlot accelerator;
-                            left_node->get_info(first_key, accelerator);
-                            upsert_node(accelerator);
-                        }
-                    }
-                    else {
-                        LeafNode * leaf_to_split = galc->absolute(plin_->logs[i].leaf_to_split);
-                        leaf_to_split->release_lock();
-                        if (!plin_->logs[i].check_orphan()) {
-                            uint32_t i = 0;
-                            _key_t key = leaf_to_split->get_min_key();
-                            while (i < plin_->root_number && key >= plin_->roots[i].min_key) {
-                                ++i;
-                            }
-                            InnerSlot * accelerator = &plin_->roots[--i];
-                            if (accelerator->type()) {
-                                accelerator = reinterpret_cast<InnerNode*>(galc->absolute(accelerator->ptr))->find_leaf_node(key, accelerator);
-                            }
-                            accelerator->release_lock();
-                        }
-                    }
+            #ifdef BACKGROUND_CHECKLOGS
+                std::thread check_logs_thread(&SelfType::check_logs, this);
+                check_logs_thread.detach();
+            #else
+                check_logs();
+            #endif
+        }
+    }
+
+    void check_logs() {
+        for (uint32_t i = 0; i < LOG_NUMBER; ++i) {
+            if (!plin_->logs[i].check_lock()) {
+                LeafNode * left_sibling = galc->absolute(plin_->logs[i].left_sibling);
+                LeafNode * right_sibling = galc->absolute(plin_->logs[i].right_sibling);
+                if (plin_->logs[i].check_valid()) {
+                    LeafNode * left_node = galc->absolute(plin_->logs[i].left_node);
+                    LeafNode * right_node = galc->absolute(plin_->logs[i].right_node);
                     if (left_sibling) {
-                        left_sibling->release_lock();
+                        left_sibling->set_next(left_node);
                     }
                     if (right_sibling) {
-                        right_sibling->release_lock();
+                        right_sibling->set_prev(right_node);
                     }
-                    plin_->logs[i].release_lock();
+                    if(!plin_->logs[i].check_orphan()) {
+                        _key_t first_key;
+                        InnerSlot accelerator;
+                        left_node->get_info(first_key, accelerator);
+                        upsert_node(accelerator);
+                    }
                 }
+                else {
+                    LeafNode * leaf_to_split = galc->absolute(plin_->logs[i].leaf_to_split);
+                    leaf_to_split->release_lock();
+                    if (!plin_->logs[i].check_orphan()) {
+                        uint32_t i = 0;
+                        _key_t key = leaf_to_split->get_min_key();
+                        while (i < plin_->root_number && key >= plin_->roots[i].min_key) {
+                            ++i;
+                        }
+                        InnerSlot * accelerator = &plin_->roots[--i];
+                        if (accelerator->type()) {
+                            accelerator = reinterpret_cast<InnerNode*>(galc->absolute(accelerator->ptr))->find_leaf_node(key, accelerator);
+                        }
+                        accelerator->release_lock();
+                    }
+                }
+                if (left_sibling) {
+                    left_sibling->release_lock();
+                }
+                if (right_sibling) {
+                    right_sibling->release_lock();
+                }
+                plin_->logs[i].release_lock();
             }
-            plin_->release_write_lock();
         }
+        plin_->release_write_lock();
     }
 
     ~PlinIndex() {}
@@ -332,20 +345,24 @@ public:
         }
         // Find in buffer
         else if (key < plin_->min_key) {
-            return galc->absolute(plin_->left_buffer)->find(key, payload);
+            btree * left_buffer = new btree(&plin_->left_buffer, false);
+            return left_buffer->find(key, payload);
         }
         else {
-            return galc->absolute(plin_->right_buffer)->find(key, payload);
+            btree * right_buffer = new btree(&plin_->right_buffer, false);
+            return right_buffer->find(key, payload);
         }
     }
 
     void range_query(_key_t lower_bound, _key_t upper_bound, std::vector<std::pair<_key_t, _payload_t>>& answers) {
         if (lower_bound < plin_->min_key) {
-            galc->absolute(plin_->left_buffer)->range_query(lower_bound, upper_bound, answers);
+            btree * left_buffer = new btree(&plin_->left_buffer, false);
+            left_buffer->range_query(lower_bound, upper_bound, answers);
             lower_bound = plin_->min_key;
         }
         if (upper_bound > plin_->max_key) {
-            galc->absolute(plin_->right_buffer)->range_query(lower_bound, upper_bound, answers);
+            btree * right_buffer = new btree(&plin_->right_buffer, false);
+            right_buffer->range_query(lower_bound, upper_bound, answers);
             upper_bound = plin_->max_key;
         }
         if (upper_bound >= plin_->min_key && lower_bound <= plin_->max_key) {
@@ -380,23 +397,35 @@ public:
                 ret = reinterpret_cast<LeafNode*>(galc->absolute(accelerator->ptr))->upsert(key, payload, plin_->global_version, leaf_to_split, accelerator);
                 // Split leaf node
                 if (ret == 5) {
-                    split(leaf_to_split, accelerator);
+                    #ifdef BACKGROUND_SPLIT
+                        std::thread split_thread(&SelfType::split, this, leaf_to_split, accelerator);
+                        split_thread.detach();
+                    #else
+                        split(leaf_to_split, accelerator);
+                    #endif
                 }
                 else if (ret == 6) {
-                    split(leaf_to_split, NULL);
+                    #ifdef BACKGROUND_SPLIT
+                        std::thread split_thread(&SelfType::split, this, leaf_to_split, nullptr);
+                        split_thread.detach();
+                    #else
+                        split(leaf_to_split, NULL);
+                    #endif
                 }
             } while (ret == 7);
         }
         // Upsert in buffer
         else if (key < plin_->min_key) {
-            uint32_t ret = galc->absolute(plin_->left_buffer)->upsert(key, payload, 0);
+            btree * left_buffer = new btree(&plin_->left_buffer, false);
+            uint32_t ret = left_buffer->upsert(key, payload, 0);
             if (ret == 4) {
                 // TODO: merge buffer
                 if (++plin_->left_buffer_number > MAX_BUFFER) {}
             }
         }
         else {
-            uint32_t ret = galc->absolute(plin_->right_buffer)->upsert(key, payload, 0);
+            btree * right_buffer = new btree(&plin_->right_buffer, false);
+            uint32_t ret = right_buffer->upsert(key, payload, 0);
             if (ret == 4) {
                 // TODO: merge buffer
                 if (++plin_->right_buffer_number > MAX_BUFFER) {}
@@ -420,12 +449,14 @@ public:
             } while (ret == 3);
         }
         else if (key < plin_->min_key) {
-            if (galc->absolute(plin_->left_buffer)->remove(key)) {
+            btree * left_buffer = new btree(&plin_->left_buffer, false);
+            if (left_buffer->remove(key)) {
                 --plin_->left_buffer_number;
             }
         }
         else {
-            if (galc->absolute(plin_->right_buffer)->remove(key)) {
+            btree * right_buffer = new btree(&plin_->right_buffer, false);
+            if (right_buffer->remove(key)) {
                 --plin_->right_buffer_number;
             }
         }
@@ -441,31 +472,33 @@ public:
     }
 
     // Split & insert nodes
-    void split (LeafNode * leaf_to_split, InnerSlot * accelerator) { 
+    void split (LeafNode * leaf_to_split, InnerSlot * accelerator = nullptr) { 
 
-        LeafNode * left_sibling = leaf_to_split->get_prev();;
+        // std::chrono::_V2::system_clock::time_point start_time = std::chrono::system_clock::now();
+
+        LeafNode * left_sibling = leaf_to_split->get_prev();
         LeafNode * right_sibling = leaf_to_split->get_next();
 
         // Check wether the index is rebuilding, no smo in rebuilding process
         if(!plin_->try_get_read_lock()) {
             return;
-            if (!leaf_to_split->try_get_split_lock()) {
-                plin_->release_read_lock();
-                return;
-                // Get split lock of the node, the prev node, and the next node
-                if ((!left_sibling) || (!left_sibling->try_get_split_lock())) {
-                    leaf_to_split->release_lock();
-                    plin_->release_read_lock();
-                    return;
-                    if ((!right_sibling) || (!right_sibling->try_get_split_lock())) {
-                        if (left_sibling)
-                            left_sibling->release_lock();
-                        leaf_to_split->release_lock();
-                        plin_->release_read_lock();
-                        return;
-                    }
-                }
-            }
+        }
+        // Get split lock of the node, the prev node, and the next node
+        if (!leaf_to_split->try_get_split_lock()) {
+            plin_->release_read_lock();
+            return;
+        }   
+        if ((!left_sibling) || (!left_sibling->try_get_split_lock())) {
+            leaf_to_split->release_lock();
+            plin_->release_read_lock();
+            return;
+        }
+        if ((!right_sibling) || (!right_sibling->try_get_split_lock())) {
+            if (left_sibling)
+                left_sibling->release_lock();
+            leaf_to_split->release_lock();
+            plin_->release_read_lock();
+            return;
         }
 
         if (accelerator) {
@@ -475,6 +508,7 @@ public:
             leaf_to_split->get_write_lock();
         }
 
+        // std::chrono::_V2::system_clock::time_point start_log_time = std::chrono::system_clock::now();
         // Write log
         uint32_t log_number = LOG_NUMBER;
         do {
@@ -494,6 +528,7 @@ public:
             plin_->logs[log_number].right_sibling = galc->relative(right_sibling);
         else
             plin_->logs[log_number].right_sibling = NULL;
+        // std::chrono::_V2::system_clock::time_point end_log_time = std::chrono::system_clock::now();
         
         std::vector<_key_t> keys;
         std::vector<_payload_t> payloads;
@@ -563,6 +598,12 @@ public:
             right_sibling->release_lock();
         plin_->logs[log_number].release_lock();
 
+        // std::chrono::_V2::system_clock::time_point end_time = std::chrono::system_clock::now();
+
+        // log_t += std::chrono::duration_cast<std::chrono::nanoseconds>(end_log_time - start_log_time);
+        // split_t += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+        // split_times++;
+
         if (double(plin_->orphan_number) / plin_->leaf_number > MAX_ORPHAN_RATIO) {
             #ifdef BACKGROUND_REBUILD
                 std::thread rebuild_thread(&SelfType::rebuild_inner_nodes, this);
@@ -594,6 +635,9 @@ public:
 
     // Rebuild inner nodes, allow insert and search, no SMO
     void rebuild_inner_nodes() {
+
+        // std::chrono::_V2::system_clock::time_point start_time = std::chrono::system_clock::now();
+
         // Get leaf nodes
         if(!plin_->get_write_lock())
             return;
@@ -671,6 +715,11 @@ public:
         mfence();
         delete [] accelerators_tmp;
         delete [] first_keys_tmp;
+
+        // std::chrono::_V2::system_clock::time_point end_time = std::chrono::system_clock::now();
+
+        // rebuild_t += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+        // rebuild_times++;
     }
 };
 
